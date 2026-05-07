@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ESP32 GPS Monitor</title>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    :root {
+      --bg: #060a12;
+      --surface: #0d1424;
+      --surface2: #111c2e;
+      --border: rgba(56, 189, 248, 0.12);
+      --border-bright: rgba(56, 189, 248, 0.35);
+      --accent: #38bdf8;
+      --accent2: #0ea5e9;
+      --green: #22c55e;
+      --amber: #f59e0b;
+      --red: #ef4444;
+      --purple: #a78bfa;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --font-display: 'Syne', sans-serif;
+      --font-mono: 'Space Mono', monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-display);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Animated grid background */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(56,189,248,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(56,189,248,0.03) 1px, transparent 1px);
+      background-size: 48px 48px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      position: relative;
+      z-index: 1;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px 16px 48px;
+    }
+
+    /* Header */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 32px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #0ea5e9, #6366f1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .brand-icon svg { width: 22px; height: 22px; }
+
+    .brand-title {
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      color: var(--text);
+    }
+
+    .brand-sub {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-top: 2px;
+    }
+
+    .live-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(34,197,94,0.08);
+      border: 1px solid rgba(34,197,94,0.25);
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--green);
+    }
+
+    .live-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.8); }
+    }
+
+    /* Navigation tabs */
+    .nav-tabs {
+      display: flex;
+      gap: 4px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 4px;
+      margin-bottom: 28px;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 10px 16px;
+      border-radius: 10px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-family: var(--font-display);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+    }
+
+    .tab-btn.active {
+      background: var(--surface2);
+      color: var(--accent);
+      border: 1px solid var(--border-bright);
+    }
+
+    .tab-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
+
+    /* Panel display */
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    /* Dashboard grid */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+
+    @media (max-width: 640px) {
+      .dashboard-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 380px) {
+      .dashboard-grid { grid-template-columns: 1fr; }
+    }
+
+    .metric-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px 16px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.3s, transform 0.2s;
+    }
+
+    .metric-card:hover {
+      border-color: var(--border-bright);
+      transform: translateY(-2px);
+    }
+
+    .metric-card::before {
+      content: '';
+      position: absolute;
+      top: -30px;
+      right: -30px;
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      opacity: 0.06;
+    }
+
+    .metric-card.accent-blue::before { background: #38bdf8; }
+    .metric-card.accent-green::before { background: #22c55e; }
+    .metric-card.accent-amber::before { background: #f59e0b; }
+    .metric-card.accent-purple::before { background: #a78bfa; }
+    .metric-card.accent-red::before { background: #ef4444; }
+    .metric-card.accent-teal::before { background: #2dd4bf; }
+
+    .metric-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .metric-icon { width: 14px; height: 14px; opacity: 0.7; }
+
+    .metric-value {
+      font-size: 24px;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -0.5px;
+    }
+
+    .metric-unit {
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--muted);
+      margin-left: 4px;
+    }
+
+    .metric-card.accent-blue .metric-value { color: var(--accent); }
+    .metric-card.accent-green .metric-value { color: var(--green); }
+    .metric-card.accent-amber .metric-value { color: var(--amber); }
+    .metric-card.accent-purple .metric-value { color: var(--purple); }
+    .metric-card.accent-red .metric-value { color: var(--red); }
+    .metric-card.accent-teal .metric-value { color: #2dd4bf; }
+
+    /* Status card special */
+    .status-card {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 16px 20px;
+    }
+
+    .status-left { display: flex; align-items: center; gap: 12px; }
+
+    .status-indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 12px rgba(34,197,94,0.6);
+      animation: pulse 1.5s infinite;
+      flex-shrink: 0;
+    }
+
+    .status-text {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    #status-value {
+      font-family: var(--font-mono);
+      color: var(--green);
+    }
+
+    .timestamp {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    /* Coordinate card */
+    .coord-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px 20px;
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .coord-item { flex: 1; min-width: 140px; }
+    .coord-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); font-family: var(--font-mono); margin-bottom: 6px; }
+    .coord-value { font-family: var(--font-mono); font-size: 18px; font-weight: 700; color: var(--accent); }
+
+    /* MAP */
+    .map-container {
+      position: relative;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    #map {
+      height: 480px;
+      width: 100%;
+      background: #0a1628;
+    }
+
+    .map-overlay {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      background: rgba(6,10,18,0.85);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border-bright);
+      border-radius: 12px;
+      padding: 12px 16px;
+      z-index: 1000;
+    }
+
+    .map-coords-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); font-family: var(--font-mono); margin-bottom: 4px; }
+    .map-lat { font-family: var(--font-mono); font-size: 13px; color: var(--accent); font-weight: 700; }
+    .map-lon { font-family: var(--font-mono); font-size: 13px; color: var(--purple); font-weight: 700; }
+
+    .map-bottom-bar {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(transparent, rgba(6,10,18,0.9));
+      padding: 32px 16px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      z-index: 999;
+      pointer-events: none;
+    }
+
+    .map-speed-badge {
+      background: rgba(6,10,18,0.9);
+      border: 1px solid var(--border-bright);
+      border-radius: 10px;
+      padding: 8px 14px;
+      font-family: var(--font-mono);
+      pointer-events: auto;
+    }
+
+    .map-speed-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+    .map-speed-value { font-size: 20px; font-weight: 700; color: var(--amber); }
+
+    .map-sat-badge {
+      background: rgba(6,10,18,0.9);
+      border: 1px solid var(--border-bright);
+      border-radius: 10px;
+      padding: 8px 14px;
+      font-family: var(--font-mono);
+      pointer-events: auto;
+    }
+
+    .map-sat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+    .map-sat-value { font-size: 20px; font-weight: 700; color: var(--purple); }
+
+    /* Path toggle */
+    .map-controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+
+    .ctrl-btn {
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+
+    .ctrl-btn.active, .ctrl-btn:hover {
+      background: var(--surface2);
+      color: var(--accent);
+      border-color: var(--border-bright);
+    }
+
+    .ctrl-btn svg { width: 13px; height: 13px; }
+
+    /* Leaflet custom marker */
+    .custom-marker {
+      width: 32px;
+      height: 32px;
+      border-radius: 50% 50% 50% 0;
+      transform: rotate(-45deg);
+      background: linear-gradient(135deg, #38bdf8, #6366f1);
+      border: 2px solid white;
+      box-shadow: 0 2px 12px rgba(56,189,248,0.5);
+    }
+
+    .custom-marker-inner {
+      width: 10px;
+      height: 10px;
+      background: white;
+      border-radius: 50%;
+      margin: 9px auto 0;
+    }
+
+    /* Leaflet dark overrides */
+    .leaflet-tile-pane { filter: brightness(0.85) saturate(0.7) hue-rotate(195deg); }
+    .leaflet-control-zoom a {
+      background: var(--surface) !important;
+      color: var(--accent) !important;
+      border-color: var(--border) !important;
+    }
+    .leaflet-popup-content-wrapper {
+      background: var(--surface) !important;
+      color: var(--text) !important;
+      border: 1px solid var(--border-bright) !important;
+      border-radius: 10px !important;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.6) !important;
+      font-family: var(--font-mono) !important;
+      font-size: 13px !important;
+    }
+    .leaflet-popup-tip { background: var(--surface) !important; }
+
+    /* Responsive */
+    @media (max-width: 480px) {
+      .nav-tabs { gap: 2px; }
+      .tab-btn { padding: 8px 10px; font-size: 11px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
+            <path d="M4.93 4.93l2.12 2.12M16.95 16.95l2.12 2.12M4.93 19.07l2.12-2.12M16.95 7.05l2.12-2.12"/>
+          </svg>
+        </div>
+        <div>
+          <div class="brand-title">ESP32 GPS Monitor</div>
+          <div class="brand-sub">sistem-otomasi · realtime</div>
+        </div>
+      </div>
+      <div class="live-badge">
+        <div class="live-dot"></div>
+        LIVE
+      </div>
+    </header>
+
+    <!-- Nav Tabs -->
+    <div class="nav-tabs">
+      <button class="tab-btn active" onclick="switchTab('dashboard')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        Dashboard
+      </button>
+      <button class="tab-btn" onclick="switchTab('map')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+        Peta Lokasi
+      </button>
+      <button class="tab-btn" onclick="switchTab('history')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Riwayat
+      </button>
+    </div>
+
+    <!-- Dashboard Panel -->
+    <div id="panel-dashboard" class="panel active">
+      <div class="dashboard-grid">
+        <!-- Status -->
+        <div class="metric-card status-card accent-green">
+          <div class="status-left">
+            <div class="status-indicator"></div>
+            <div>
+              <div class="metric-label">Status GPS</div>
+              <div class="status-text"><span id="status-value">---</span></div>
+            </div>
+          </div>
+          <div class="timestamp" id="last-update">menunggu data...</div>
+        </div>
+
+        <!-- Lat -->
+        <div class="metric-card accent-blue">
+          <div class="metric-label">
+            <svg class="metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="2" x2="12" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            Latitude
+          </div>
+          <div class="metric-value" id="lat-val">---</div>
+        </div>
+
+        <!-- Lon -->
+        <div class="metric-card accent-purple">
+          <div class="metric-label">
+            <svg class="metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            Longitude
+          </div>
+          <div class="metric-value" id="lon-val">---</div>
+        </div>
+
+        <!-- Speed -->
+        <div class="metric-card accent-amber">
+          <div class="metric-label">
+            <svg class="metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12H2l4-4 4 4H7"/><path d="M19 12h3l-4 4-4-4h2"/><circle cx="12" cy="12" r="3"/></svg>
+            Kecepatan
+          </div>
+          <div class="metric-value" id="speed-val">---<span class="metric-unit">km/h</span></div>
+        </div>
+
+        <!-- Satellite -->
+        <div class="metric-card accent-teal">
+          <div class="metric-label">
+            <svg class="metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="3"/><line x1="12" y1="22" x2="12" y2="8"/><path d="M5 12H2a10 10 0 0 0 20 0h-3"/></svg>
+            Satelit
+          </div>
+          <div class="metric-value" id="sat-val">---<span class="metric-unit">sat</span></div>
+        </div>
+
+        <!-- Pressure -->
+        <div class="metric-card accent-red">
+          <div class="metric-label">
+            <svg class="metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            Tekanan
+          </div>
+          <div class="metric-value" id="pressure-val">---<span class="metric-unit">hPa</span></div>
+        </div>
+
+        <!-- Altitude -->
+        <div class="metric-card accent-green">
+          <div class="metric-label">
+            <svg class="metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>
+            Ketinggian
+          </div>
+          <div class="metric-value" id="alt-val">---<span class="metric-unit">m</span></div>
+        </div>
+      </div>
+
+      <!-- Coordinates full row -->
+      <div class="coord-card">
+        <div class="coord-item">
+          <div class="coord-label">📍 Koordinat Lengkap</div>
+          <div class="coord-value" id="coord-full">Menunggu sinyal GPS...</div>
+        </div>
+        <button class="ctrl-btn" id="goto-map-btn" onclick="switchTab('map')" style="flex-shrink:0;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+          Lihat di Peta
+        </button>
+      </div>
+    </div>
+
+    <!-- Map Panel -->
+    <div id="panel-map" class="panel">
+      <div class="map-controls">
+        <button class="ctrl-btn active" id="btn-track" onclick="toggleTracking()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          <span id="track-label">Tracking: ON</span>
+        </button>
+        <button class="ctrl-btn" onclick="clearPath()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+          Hapus Jalur
+        </button>
+        <button class="ctrl-btn" onclick="centerMap()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
+          Ke Lokasi
+        </button>
+      </div>
+
+      <div class="map-container">
+        <div id="map"></div>
+
+        <div class="map-overlay">
+          <div class="map-coords-label">Posisi</div>
+          <div class="map-lat" id="map-lat-display">---</div>
+          <div class="map-lon" id="map-lon-display">---</div>
+        </div>
+
+        <div class="map-bottom-bar">
+          <div class="map-speed-badge">
+            <div class="map-speed-label">Kecepatan</div>
+            <div class="map-speed-value"><span id="map-speed">---</span> <span style="font-size:11px;color:var(--muted)">km/h</span></div>
+          </div>
+          <div class="map-sat-badge">
+            <div class="map-sat-label">Satelit</div>
+            <div class="map-sat-value"><span id="map-sat">---</span> <span style="font-size:11px;color:var(--muted)">sat</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- History Panel -->
+    <div id="panel-history" class="panel">
+      <div style="background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:24px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; flex-wrap:wrap; gap:10px;">
+          <div>
+            <div style="font-size:16px; font-weight:700;">Riwayat Posisi</div>
+            <div style="font-size:11px; color:var(--muted); font-family:var(--font-mono); margin-top:3px;">Sesi ini · maks 50 titik</div>
+          </div>
+          <button class="ctrl-btn" onclick="clearHistory()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+            Hapus
+          </button>
+        </div>
+        <div id="history-list">
+          <div style="text-align:center; color:var(--muted); font-family:var(--font-mono); font-size:13px; padding:40px 0;">Menunggu data GPS masuk...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyDnPPRKN2VW_zJIC8IFjjgg8qMWaX-Zjeo",
+      databaseURL: "https://sistem-otomasi-65a7a-default-rtdb.asia-southeast1.firebasedatabase.app/"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // State
+    let currentLat = null, currentLon = null;
+    let trackingOn = true;
+    let posHistory = [];
+    let map = null, marker = null, pathLine = null;
+
+    // Init map
+    function initMap() {
+      if (map) return;
+      map = L.map('map', {
+        center: [-6.2, 106.8],
+        zoom: 13,
+        zoomControl: true
+      });
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap',
+        maxZoom: 19
+      }).addTo(map);
+
+      pathLine = L.polyline([], {
+        color: '#38bdf8',
+        weight: 3,
+        opacity: 0.7,
+        dashArray: '6,4'
+      }).addTo(map);
+    }
+
+    // Tab switching
+    function switchTab(tab) {
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+
+      document.getElementById('panel-' + tab).classList.add('active');
+      document.querySelectorAll('.tab-btn')[['dashboard','map','history'].indexOf(tab)].classList.add('active');
+
+      if (tab === 'map') {
+        initMap();
+        setTimeout(() => {
+          map.invalidateSize();
+          if (currentLat && currentLon) updateMapMarker(currentLat, currentLon);
+        }, 100);
+      }
+    }
+
+    function toggleTracking() {
+      trackingOn = !trackingOn;
+      const btn = document.getElementById('btn-track');
+      const lbl = document.getElementById('track-label');
+      if (trackingOn) {
+        btn.classList.add('active');
+        lbl.textContent = 'Tracking: ON';
+      } else {
+        btn.classList.remove('active');
+        lbl.textContent = 'Tracking: OFF';
+      }
+    }
+
+    function clearPath() {
+      if (pathLine) pathLine.setLatLngs([]);
+      posHistory = [];
+    }
+
+    function clearHistory() {
+      posHistory = [];
+      renderHistory();
+    }
+
+    function centerMap() {
+      if (map && currentLat && currentLon) {
+        map.setView([currentLat, currentLon], 16);
+      }
+    }
+
+    function updateMapMarker(lat, lon) {
+      if (!map) return;
+
+      const iconHtml = `<div class="custom-marker"><div class="custom-marker-inner"></div></div>`;
+      const icon = L.divIcon({ html: iconHtml, iconSize: [32, 32], iconAnchor: [16, 32], className: '' });
+
+      if (!marker) {
+        marker = L.marker([lat, lon], { icon }).addTo(map);
+        marker.bindPopup(`<b>ESP32 GPS</b><br>Lat: ${lat}<br>Lon: ${lon}`);
+      } else {
+        marker.setLatLng([lat, lon]);
+        marker.setPopupContent(`<b>ESP32 GPS</b><br>Lat: ${lat}<br>Lon: ${lon}`);
+      }
+
+      if (trackingOn) {
+        const latlngs = pathLine.getLatLngs();
+        const last = latlngs[latlngs.length - 1];
+        if (!last || last.lat !== lat || last.lng !== lon) {
+          latlngs.push(L.latLng(lat, lon));
+          pathLine.setLatLngs(latlngs);
+          map.setView([lat, lon], map.getZoom() || 15);
+        }
+      }
+    }
+
+    function renderHistory() {
+      const list = document.getElementById('history-list');
+      if (posHistory.length === 0) {
+        list.innerHTML = `<div style="text-align:center;color:var(--muted);font-family:var(--font-mono);font-size:13px;padding:40px 0;">Belum ada data terbaru...</div>`;
+        return;
+      }
+      list.innerHTML = [...posHistory].reverse().map((h, i) => `
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);${i===0?'border-top:1px solid var(--border);':''}">
+          <div style="width:28px;height:28px;border-radius:8px;background:rgba(56,189,248,0.1);border:1px solid var(--border-bright);display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:10px;color:var(--accent);flex-shrink:0;">${posHistory.length - i}</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">${h.lat}, ${h.lon}</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px;">${h.speed} km/h · ${h.alt} m · ${h.sat} sat</div>
+          </div>
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--muted);flex-shrink:0;">${h.time}</div>
+        </div>
+      `).join('');
+    }
+
+    // Firebase listener
+    db.ref("monitor").on("value", (snapshot) => {
+      const d = snapshot.val();
+      if (!d) return;
+
+      const now = new Date();
+      const ts = now.toLocaleTimeString('id-ID');
+
+      // Dashboard
+      document.getElementById('status-value').textContent = d.status || '---';
+      document.getElementById('lat-val').textContent = d.latitude ?? '---';
+      document.getElementById('lon-val').textContent = d.longitude ?? '---';
+      document.getElementById('speed-val').innerHTML = (d.speed ?? '---') + '<span class="metric-unit">km/h</span>';
+      document.getElementById('sat-val').innerHTML = (d.satellite ?? '---') + '<span class="metric-unit">sat</span>';
+      document.getElementById('pressure-val').innerHTML = (d.pressure ?? '---') + '<span class="metric-unit">hPa</span>';
+      document.getElementById('alt-val').innerHTML = (d.altitude ?? '---') + '<span class="metric-unit">m</span>';
+      document.getElementById('last-update').textContent = 'Update: ' + ts;
+
+      const lat = parseFloat(d.latitude);
+      const lon = parseFloat(d.longitude);
+
+      if (!isNaN(lat) && !isNaN(lon)) {
+        currentLat = lat;
+        currentLon = lon;
+
+        document.getElementById('coord-full').textContent = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+
+        // Map overlays
+        document.getElementById('map-lat-display').textContent = lat.toFixed(6) + '° N/S';
+        document.getElementById('map-lon-display').textContent = lon.toFixed(6) + '° E/W';
+        document.getElementById('map-speed').textContent = d.speed ?? '---';
+        document.getElementById('map-sat').textContent = d.satellite ?? '---';
+
+        updateMapMarker(lat, lon);
+
+        // History
+        posHistory.push({ lat: lat.toFixed(6), lon: lon.toFixed(6), speed: d.speed, alt: d.altitude, sat: d.satellite, time: ts });
+        if (posHistory.length > 50) posHistory.shift();
+        renderHistory();
+      }
+    });
+  </script>
+</body>
+</html>
